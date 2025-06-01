@@ -6,12 +6,15 @@ const playersListDiv = document.getElementById('players-list');
 const loadingOverlay = document.getElementById('loading-overlay');
 const metadataCommentsListDiv = document.getElementById('metadata-comments-list');
 const refreshCommentsButton = document.getElementById('refresh-comments-btn');
+const assetLibraryListDiv = document.getElementById('asset-library-list');
 
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
 const ENTITY_DISPLAY_SIZE = 80;
 
 const room = new WebsimSocket();
+const assetCollection = room.collection('asset_v1'); // For storing generated assets
+
 let metadataComments = []; // Stores our augmented comment objects
 let knownCommentIds = new Set(); // To track processed API comment IDs
 let currentProjectId = null;
@@ -39,9 +42,11 @@ async function init() {
 
         room.subscribeRoomState(handleRoomStateUpdate);
         room.subscribePresence(handlePresenceUpdate);
+        assetCollection.subscribe(renderAssetLibrary); // Subscribe to asset changes
         
         handleRoomStateUpdate(room.roomState);
         handlePresenceUpdate(room.presence);
+        renderAssetLibrary(assetCollection.getList()); // Initial render of asset library
 
         const project = await window.websim.getCurrentProject();
         if (project && project.id) {
@@ -59,7 +64,14 @@ async function init() {
             fetchInitialComments(true); // true to force a full refresh feel
         });
         
-        addLogMessage("System", "Game initialized. Process a comment from the 'Project Comments' list to begin.");
+        // Setup drag and drop for the game canvas
+        gameCanvas.addEventListener('dragover', handleDragOverCanvas);
+        gameCanvas.addEventListener('drop', handleDropOnCanvas);
+        gameCanvas.addEventListener('dragenter', () => gameCanvas.classList.add('drag-over'));
+        gameCanvas.addEventListener('dragleave', () => gameCanvas.classList.remove('drag-over'));
+
+
+        addLogMessage("System", "Game initialized. Process a comment or drag an asset to the canvas.");
 
     } catch (error) {
         console.error("Initialization failed:", error);
@@ -124,7 +136,9 @@ function renderEntities(entities) {
         entityElement.setAttribute('y', entity.y);
         entityElement.setAttribute('width', ENTITY_DISPLAY_SIZE);
         entityElement.setAttribute('height', ENTITY_DISPLAY_SIZE);
-        entityElement.style.transformOrigin = `${entity.x + ENTITY_DISPLAY_SIZE/2}px ${entity.y + ENTITY_DISPLAY_SIZE/2}px`;
+        // Ensure transformOrigin is correct for SVG elements if scaling from center
+        // The x,y attributes are top-left, so center would be x + width/2, y + height/2
+        // GSAP handles this for x and y tweens, but explicit scale origin might be needed if not default.
         
         const titleEl = entityElement.querySelector('title');
         titleEl.textContent = `${entity.name} (created by ${entity.ownerUsername || 'Unknown'}). Prompt: "${entity.userPrompt}"`;
@@ -142,7 +156,7 @@ function renderPlayers(presence) {
             playerDiv.classList.add('player-item');
 
             const avatarImg = document.createElement('img');
-            avatarImg.src = room.peers[clientId].avatarUrl || `https://avatar.iran.liara.run/username?username=${player.username}`;
+            avatarImg.src = room.peers[clientId].avatarUrl || `https://images.websim.com/avatar/${player.username}`;
             avatarImg.alt = player.username;
             avatarImg.classList.add('player-avatar');
 
@@ -155,6 +169,43 @@ function renderPlayers(presence) {
         }
     }
 }
+
+function renderAssetLibrary(assets) {
+    assetLibraryListDiv.innerHTML = '';
+    if (!assets || assets.length === 0) {
+        assetLibraryListDiv.innerHTML = '<p>No assets generated yet. Process a "create" comment!</p>';
+        return;
+    }
+
+    assets.forEach(asset => {
+        if (!asset.imageUrl || !asset.name) return; // Skip incomplete assets
+
+        const assetItemDiv = document.createElement('div');
+        assetItemDiv.classList.add('asset-item');
+
+        const assetImg = document.createElement('img');
+        assetImg.src = asset.imageUrl;
+        assetImg.alt = asset.name;
+        assetImg.draggable = true;
+        assetImg.addEventListener('dragstart', (event) => {
+            event.dataTransfer.setData("application/json", JSON.stringify({
+                name: asset.name,
+                imageUrl: asset.imageUrl,
+                originalPrompt: asset.originalPrompt || "N/A"
+            }));
+            event.dataTransfer.effectAllowed = "copy";
+        });
+
+        const assetNameP = document.createElement('p');
+        assetNameP.classList.add('asset-item-name');
+        assetNameP.textContent = asset.name;
+
+        assetItemDiv.appendChild(assetImg);
+        assetItemDiv.appendChild(assetNameP);
+        assetLibraryListDiv.appendChild(assetItemDiv);
+    });
+}
+
 
 async function fetchCommentsAPI(limit = 10) {
     if (!currentProjectId) return null;
@@ -255,7 +306,7 @@ function renderMetadataComments() {
         metaP.classList.add('comment-meta');
         const userAvatar = comment.apiData.author && comment.apiData.author.avatar_url ? 
             `<img src="${comment.apiData.author.avatar_url}" alt="${comment.user}" class="comment-author-avatar">` :
-            `<img src="https://avatar.iran.liara.run/username?username=${comment.user}" alt="${comment.user}" class="comment-author-avatar">`;
+            `<img src="https://images.websim.com/avatar/${comment.user}" alt="${comment.user}" class="comment-author-avatar">`;
         
         metaP.innerHTML = `${userAvatar} By: <strong>${comment.user}</strong> - ${new Date(comment.timestamp).toLocaleString()}`;
 
@@ -402,6 +453,18 @@ async function processLlmResponse(responseData, originalUserPrompt, commentAutho
                     throw new Error("Image generation failed to return a URL.");
                 }
 
+                // Create the asset in the persistent asset library
+                await assetCollection.create({
+                    name: responseData.name,
+                    imageUrl: imageResult.url,
+                    originalPrompt: responseData.image_prompt, // Store the prompt used for image gen
+                    creatorUsername: commentAuthorUsername || "Unknown",
+                    createdAt: Date.now()
+                });
+                addLogMessage("System", `${responseData.name} added to Asset Library by ${commentAuthorUsername}.`);
+
+
+                // Also create an instance of the entity on the canvas from the original comment
                 const entityId = `entity-${room.clientId}-${Date.now()}`; 
                 const newEntity = {
                     id: entityId,
@@ -411,7 +474,7 @@ async function processLlmResponse(responseData, originalUserPrompt, commentAutho
                     y: Math.random() * (WORLD_HEIGHT - ENTITY_DISPLAY_SIZE),
                     ownerClientId: room.clientId, 
                     ownerUsername: commentAuthorUsername || "Unknown", 
-                    userPrompt: originalUserPrompt, 
+                    userPrompt: originalUserPrompt, // The comment that triggered this
                     createdAt: Date.now()
                 };
                 
@@ -419,7 +482,7 @@ async function processLlmResponse(responseData, originalUserPrompt, commentAutho
                 updatedEntities[entityId] = newEntity;
 
                 await room.updateRoomState({ entities: updatedEntities });
-                addLogMessage("System", `${responseData.name} has been created by ${commentAuthorUsername}!`);
+                addLogMessage("System", `${responseData.name} has been created on canvas by ${commentAuthorUsername}!`);
 
             } catch (error) {
                 console.error("Image generation or entity creation error:", error);
@@ -446,6 +509,75 @@ async function processLlmResponse(responseData, originalUserPrompt, commentAutho
             throw new Error(`Unknown AI action: ${responseData.action}`);
     }
 }
+
+function handleDragOverCanvas(event) {
+    event.preventDefault(); // Necessary to allow dropping
+    event.dataTransfer.dropEffect = "copy";
+    gameCanvas.classList.add('drag-over');
+}
+
+async function handleDropOnCanvas(event) {
+    event.preventDefault();
+    gameCanvas.classList.remove('drag-over');
+    const dataString = event.dataTransfer.getData("application/json");
+    if (!dataString) {
+        console.warn("Drop event with no data or incorrect data type.");
+        return;
+    }
+
+    try {
+        const assetData = JSON.parse(dataString);
+        if (!assetData.imageUrl || !assetData.name) {
+            console.warn("Dropped data is missing imageUrl or name.", assetData);
+            return;
+        }
+
+        const CTM = gameCanvas.getScreenCTM();
+        if (!CTM) {
+            console.error("Could not get CTM for SVG canvas.");
+            return;
+        }
+        const svgPoint = gameCanvas.createSVGPoint();
+        svgPoint.x = event.clientX;
+        svgPoint.y = event.clientY;
+        
+        const canvasPoint = svgPoint.matrixTransform(CTM.inverse());
+
+        let dropX = canvasPoint.x - ENTITY_DISPLAY_SIZE / 2;
+        let dropY = canvasPoint.y - ENTITY_DISPLAY_SIZE / 2;
+
+        // Clamp coordinates to world boundaries
+        dropX = Math.max(0, Math.min(dropX, WORLD_WIDTH - ENTITY_DISPLAY_SIZE));
+        dropY = Math.max(0, Math.min(dropY, WORLD_HEIGHT - ENTITY_DISPLAY_SIZE));
+
+        const currentUser = await window.websim.getCurrentUser();
+        const draggerUsername = currentUser ? currentUser.username : "Unknown Dragger";
+
+        const entityId = `entity-drag-${room.clientId}-${Date.now()}`;
+        const newEntity = {
+            id: entityId,
+            name: assetData.name,
+            imageUrl: assetData.imageUrl,
+            x: dropX,
+            y: dropY,
+            ownerClientId: room.clientId,
+            ownerUsername: draggerUsername,
+            userPrompt: `Placed '${assetData.name}' from asset library. Original gen prompt: "${assetData.originalPrompt}"`,
+            createdAt: Date.now()
+        };
+
+        const updatedEntities = { ... (room.roomState.entities || {}) };
+        updatedEntities[entityId] = newEntity;
+        await room.updateRoomState({ entities: updatedEntities });
+
+        addLogMessage("System", `${assetData.name} dragged onto canvas at (${Math.round(dropX)}, ${Math.round(dropY)}) by ${draggerUsername}.`);
+
+    } catch (error) {
+        console.error("Error processing dropped asset:", error);
+        addLogMessage("Error", `Failed to place asset on canvas: ${error.message}`);
+    }
+}
+
 
 function addLogMessage(sender, message) {
     const messageElement = document.createElement('p');
