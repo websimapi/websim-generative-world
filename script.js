@@ -5,16 +5,17 @@ const messageLog = document.getElementById('message-log');
 const playersListDiv = document.getElementById('players-list');
 const loadingOverlay = document.getElementById('loading-overlay');
 const metadataCommentsListDiv = document.getElementById('metadata-comments-list');
-const simulateNewCommentButton = document.getElementById('simulate-new-comment-btn');
+const refreshCommentsButton = document.getElementById('refresh-comments-btn');
 
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
 const ENTITY_DISPLAY_SIZE = 80;
 
 const room = new WebsimSocket();
-let conversationHistory = [];
-let metadataComments = [];
-let commentIdCounter = 0;
+let metadataComments = []; // Stores our augmented comment objects
+let knownCommentIds = new Set(); // To track processed API comment IDs
+let currentProjectId = null;
+const POLLING_INTERVAL = 10000; // 10 seconds
 
 async function init() {
     setLoading(true, "Initializing...");
@@ -42,28 +43,28 @@ async function init() {
         handleRoomStateUpdate(room.roomState);
         handlePresenceUpdate(room.presence);
 
-        simulateNewCommentButton.addEventListener('click', () => {
-            const prompts = [
-                "Create a playful kitten.", 
-                "Add a giant, ancient tree.", 
-                "What kind of entities are here?",
-                "Make a sparkling river flow through the scene.",
-                "A small, friendly robot waves hello."
-            ];
-            const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
-            const users = ["UserAlpha", "UserBeta", "UserGamma"];
-            const randomUser = users[Math.floor(Math.random() * users.length)];
-            addSimulatedComment(randomPrompt, randomUser);
-        });
+        const project = await window.websim.getCurrentProject();
+        if (project && project.id) {
+            currentProjectId = project.id;
+            addLogMessage("System", `Connected to project: ${project.title || project.id}`);
+            await fetchInitialComments();
+            setInterval(fetchNewComments, POLLING_INTERVAL);
+        } else {
+            addLogMessage("Error", "Could not get current project ID. Comments will not be loaded.");
+            metadataCommentsListDiv.innerHTML = '<p>Error: Could not load project comments.</p>';
+        }
 
-        addSimulatedComment("Create a majestic dragon with fiery breath.", "SystemInit1");
-        addSimulatedComment("What is in this world currently?", "SystemInit2");
+        refreshCommentsButton.addEventListener('click', () => {
+            addLogMessage("System", "Manually refreshing comments...");
+            fetchInitialComments(true); // true to force a full refresh feel
+        });
         
-        addLogMessage("System", "Game initialized. Process a comment from the 'Metadata Comments' list to begin or simulate a new one!");
+        addLogMessage("System", "Game initialized. Process a comment from the 'Project Comments' list to begin.");
 
     } catch (error) {
         console.error("Initialization failed:", error);
         addLogMessage("Error", `Initialization failed: ${error.message}`);
+         metadataCommentsListDiv.innerHTML = `<p>Initialization error: ${error.message}</p>`;
     } finally {
         setLoading(false);
     }
@@ -155,25 +156,93 @@ function renderPlayers(presence) {
     }
 }
 
-function addSimulatedComment(promptText, username) {
-    commentIdCounter++;
-    const newComment = {
-        id: `comment-${commentIdCounter}-${Date.now()}`,
-        timestamp: Date.now(),
-        user: username || "Anonymous",
-        prompt: promptText,
-        status: 'pending', 
-        processed: false,
-        outputMessage: null,
-    };
-    metadataComments.unshift(newComment); 
-    renderMetadataComments();
+async function fetchCommentsAPI(limit = 10) {
+    if (!currentProjectId) return null;
+    try {
+        const response = await fetch(`/api/v1/projects/${currentProjectId}/comments?sort_by=created_at&sort_order=desc&first=${limit}`);
+        if (!response.ok) {
+            throw new Error(`API Error: ${response.status} ${response.statusText}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error("Failed to fetch comments:", error);
+        addLogMessage("Error", `Failed to fetch comments: ${error.message}`);
+        return null;
+    }
 }
+
+function processFetchedComments(apiResponse, isInitialLoad = false) {
+    if (!apiResponse || !apiResponse.comments || !apiResponse.comments.data) {
+        if (isInitialLoad && metadataComments.length === 0) {
+             metadataCommentsListDiv.innerHTML = '<p>No comments found for this project yet.</p>';
+        }
+        return false; // No new comments or error
+    }
+
+    let newCommentsAdded = false;
+    const fetchedApiComments = apiResponse.comments.data.map(item => item.comment).reverse(); // Reverse to process oldest first from the batch
+
+    for (const apiComment of fetchedApiComments) {
+        if (knownCommentIds.has(apiComment.id)) {
+            // If it's a full refresh (not initial load) and we want to update existing, we could.
+            // For now, just skip if known.
+            continue;
+        }
+
+        knownCommentIds.add(apiComment.id);
+        const newAugmentedComment = {
+            id: apiComment.id,
+            apiData: apiComment,
+            timestamp: new Date(apiComment.created_at).getTime(),
+            user: apiComment.author ? apiComment.author.username : 'Unknown User',
+            prompt: apiComment.raw_content || (apiComment.content ? "Rich content (cannot auto-process)" : "No prompt text available"),
+            status: 'pending',
+            processed: false,
+            outputMessage: null,
+        };
+        metadataComments.push(newAugmentedComment); // Add to end, then sort
+        newCommentsAdded = true;
+    }
+
+    if (newCommentsAdded || isInitialLoad) {
+        metadataComments.sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+        renderMetadataComments();
+    }
+    return newCommentsAdded;
+}
+
+async function fetchInitialComments(forceRefresh = false) {
+    if (!currentProjectId) return;
+    if (forceRefresh) {
+        metadataComments = [];
+        knownCommentIds.clear();
+        metadataCommentsListDiv.innerHTML = '<p>Refreshing comments...</p>';
+    } else {
+        metadataCommentsListDiv.innerHTML = '<p>Loading comments...</p>';
+    }
+    setLoading(true, "Loading comments...");
+    const apiResponse = await fetchCommentsAPI(20); // Fetch more for initial load
+    processFetchedComments(apiResponse, true);
+    setLoading(false);
+     if (metadataComments.length === 0 && !forceRefresh) {
+        metadataCommentsListDiv.innerHTML = '<p>No comments found for this project yet.</p>';
+    }
+}
+
+async function fetchNewComments() {
+    if (!currentProjectId) return;
+    const apiResponse = await fetchCommentsAPI(5); // Fetch fewer for polling
+    const newAdded = processFetchedComments(apiResponse, false);
+    if (newAdded) {
+        addLogMessage("System", "New comments loaded.");
+    }
+}
+
 
 function renderMetadataComments() {
     metadataCommentsListDiv.innerHTML = '';
     if (metadataComments.length === 0) {
-        metadataCommentsListDiv.innerHTML = '<p>No comments yet. Simulate one!</p>';
+        metadataCommentsListDiv.innerHTML = '<p>No comments to display. Waiting for new comments...</p>';
         return;
     }
 
@@ -184,7 +253,12 @@ function renderMetadataComments() {
 
         const metaP = document.createElement('p');
         metaP.classList.add('comment-meta');
-        metaP.textContent = `By: ${comment.user} - ${new Date(comment.timestamp).toLocaleTimeString()}`;
+        const userAvatar = comment.apiData.author && comment.apiData.author.avatar_url ? 
+            `<img src="${comment.apiData.author.avatar_url}" alt="${comment.user}" class="comment-author-avatar">` :
+            `<img src="https://avatar.iran.liara.run/username?username=${comment.user}" alt="${comment.user}" class="comment-author-avatar">`;
+        
+        metaP.innerHTML = `${userAvatar} By: <strong>${comment.user}</strong> - ${new Date(comment.timestamp).toLocaleString()}`;
+
 
         const promptP = document.createElement('p');
         promptP.classList.add('comment-prompt');
@@ -204,12 +278,15 @@ function renderMetadataComments() {
             outputP.textContent = `Output: ${comment.outputMessage}`;
             itemDiv.appendChild(outputP);
         }
+        
+        const canProcess = comment.prompt && !comment.prompt.startsWith("Rich content");
 
         const processButton = document.createElement('button');
         processButton.textContent = (comment.status === 'success' || comment.status === 'error') ? 'Re-process' : 'Process';
-        if (comment.status === 'processing') {
+        if (comment.status === 'processing' || !canProcess) {
             processButton.disabled = true;
-            processButton.textContent = 'Processing...';
+            if (!canProcess) processButton.textContent = 'Cannot Auto-Process';
+            else processButton.textContent = 'Processing...';
         }
         processButton.addEventListener('click', () => handleCommentClick(comment.id));
         
@@ -224,6 +301,10 @@ function handleCommentClick(commentId) {
         addLogMessage("Error", `Comment ${commentId} not found.`);
         return;
     }
+    if (!comment.prompt || comment.prompt.startsWith("Rich content")) {
+        addLogMessage("System", `Cannot automatically process comment "${comment.id}" as it's rich content or has no prompt.`);
+        return;
+    }
     processCommentPrompt(comment);
 }
 
@@ -234,7 +315,7 @@ async function processCommentPrompt(comment) {
     }
 
     comment.status = 'processing';
-    comment.processed = true; 
+    // comment.processed = true; // This seems redundant if status handles it
     renderMetadataComments(); 
 
     const commandText = comment.prompt;
@@ -298,6 +379,7 @@ Respond ONLY with a valid JSON object.`;
         comment.status = 'error';
         comment.outputMessage = `Error: ${error.message}`;
     } finally {
+        comment.processed = true; // Mark as processed regardless of outcome for re-process logic
         setLoading(false);
         renderMetadataComments(); 
     }

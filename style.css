@@ -52,26 +52,6 @@ body, html {
     overflow-y: auto;
 }
 
-#submit-command { 
-    padding: 10px 15px;
-    background-color: #007bff;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 16px;
-    transition: background-color 0.3s;
-}
-
-#submit-command:hover {
-    background-color: #0056b3;
-}
-
-#submit-command:disabled {
-    background-color: #aaa;
-    cursor: not-allowed;
-}
-
 #message-log {
     background-color: #fff;
     border: 1px solid #ddd;
@@ -176,7 +156,7 @@ body, html {
 }
 
 #metadata-comments-list {
-    max-height: 250px; 
+    max-height: 300px; 
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -196,15 +176,26 @@ body, html {
 }
 
 .comment-meta {
-    font-size: 0.8em;
-    color: #666;
+    font-size: 0.9em;
+    color: #555;
     margin-bottom: 5px !important;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.comment-author-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid #ddd;
 }
 
 .comment-prompt {
     font-style: italic;
     color: #333;
     margin-bottom: 8px !important;
+    word-wrap: break-word;
 }
 
 .comment-status {
@@ -235,6 +226,7 @@ body, html {
     border-radius: 3px;
     cursor: pointer;
     transition: background-color 0.2s;
+    margin-top: 5px;
 }
 
 .metadata-comment-item button:hover {
@@ -246,9 +238,9 @@ body, html {
     cursor: not-allowed;
 }
 
-#simulate-new-comment-btn {
+#refresh-comments-btn {
     padding: 8px 12px;
-    background-color: #17a2b8;
+    background-color: #007bff;
     color: white;
     border: none;
     border-radius: 4px;
@@ -257,6 +249,6 @@ body, html {
     align-self: flex-start; 
 }
 
-#simulate-new-comment-btn:hover {
-    background-color: #138496;
+#refresh-comments-btn:hover {
+    background-color: #0056b3; 
 }
