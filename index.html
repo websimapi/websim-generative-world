@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generative World</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+</head>
+<body>
+    <div id="app-container">
+        <div id="game-area">
+            <svg id="game-canvas" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet"></svg>
+            <div id="loading-overlay" class="hidden">
+                <div class="spinner"></div>
+                <p>Generating...</p>
+            </div>
+        </div>
+        <div id="controls-panel">
+            <div id="input-area">
+                <textarea id="command-input" placeholder="Describe what to create or ask about the world..."></textarea>
+                <button id="submit-command">Execute</button>
+            </div>
+            <div id="message-log">
+                <p>Welcome to the Generative World! Type a command to begin.</p>
+            </div>
+            <div id="players-list-container">
+                <h3>Players Online:</h3>
+                <div id="players-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+        }
+    }
+    </script>
+    <script type="module" src="script.js"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
