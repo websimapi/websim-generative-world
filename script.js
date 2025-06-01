@@ -1,28 +1,29 @@
 import { gsap } from 'gsap';
 
 const gameCanvas = document.getElementById('game-canvas');
-const commandInput = document.getElementById('command-input');
-const submitCommandButton = document.getElementById('submit-command');
 const messageLog = document.getElementById('message-log');
 const playersListDiv = document.getElementById('players-list');
 const loadingOverlay = document.getElementById('loading-overlay');
+const metadataCommentsListDiv = document.getElementById('metadata-comments-list');
+const simulateNewCommentButton = document.getElementById('simulate-new-comment-btn');
 
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
-const ENTITY_DISPLAY_SIZE = 80; // Base size for displaying entities
+const ENTITY_DISPLAY_SIZE = 80;
 
 const room = new WebsimSocket();
 let conversationHistory = [];
+let metadataComments = [];
+let commentIdCounter = 0;
 
 async function init() {
     setLoading(true, "Initializing...");
     try {
         await room.initialize();
 
-        // Initialize room state if it's the first user or state is missing
         if (!room.roomState || typeof room.roomState.entities === 'undefined') {
             await room.updateRoomState({
-                entities: {}, // Store entities as { id: { data... } }
+                entities: {},
             });
         }
         
@@ -35,23 +36,30 @@ async function init() {
             });
         }
 
-
         room.subscribeRoomState(handleRoomStateUpdate);
         room.subscribePresence(handlePresenceUpdate);
         
-        // Initial render based on current state
         handleRoomStateUpdate(room.roomState);
         handlePresenceUpdate(room.presence);
 
-        submitCommandButton.addEventListener('click', handleCommandSubmit);
-        commandInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleCommandSubmit();
-            }
+        simulateNewCommentButton.addEventListener('click', () => {
+            const prompts = [
+                "Create a playful kitten.", 
+                "Add a giant, ancient tree.", 
+                "What kind of entities are here?",
+                "Make a sparkling river flow through the scene.",
+                "A small, friendly robot waves hello."
+            ];
+            const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
+            const users = ["UserAlpha", "UserBeta", "UserGamma"];
+            const randomUser = users[Math.floor(Math.random() * users.length)];
+            addSimulatedComment(randomPrompt, randomUser);
         });
 
-        addLogMessage("System", "Game initialized. Describe what you want to create!");
+        addSimulatedComment("Create a majestic dragon with fiery breath.", "SystemInit1");
+        addSimulatedComment("What is in this world currently?", "SystemInit2");
+        
+        addLogMessage("System", "Game initialized. Process a comment from the 'Metadata Comments' list to begin or simulate a new one!");
 
     } catch (error) {
         console.error("Initialization failed:", error);
@@ -65,12 +73,8 @@ function setLoading(isLoading, text = "Generating...") {
     if (isLoading) {
         loadingOverlay.classList.remove('hidden');
         loadingOverlay.querySelector('p').textContent = text;
-        submitCommandButton.disabled = true;
-        commandInput.disabled = true;
     } else {
         loadingOverlay.classList.add('hidden');
-        submitCommandButton.disabled = false;
-        commandInput.disabled = false;
     }
 }
 
@@ -87,52 +91,57 @@ function handlePresenceUpdate(currentPresence) {
 }
 
 function renderEntities(entities) {
-    // Clear existing entities, except player cursors if any
-    // A more sophisticated approach would be to update/add/remove specific SVG elements
-    while (gameCanvas.firstChild) {
-        // Don't remove player avatar elements if they are part of the canvas
-        // For now, assuming all children are game entities
-        gameCanvas.removeChild(gameCanvas.firstChild);
-    }
+    const existingEntityElements = Array.from(gameCanvas.querySelectorAll('.game-entity'));
+    existingEntityElements.forEach(el => {
+        if (!entities[el.id]) { 
+            gsap.to(el, { opacity: 0, scale: 0.5, duration: 0.3, onComplete: () => el.remove() });
+        }
+    });
 
     for (const entityId in entities) {
         const entity = entities[entityId];
-        if (!entity) continue; // Skip if entity was deleted (null)
+        if (!entity) continue;
 
-        const entityElement = document.createElementNS("http://www.w3.org/2000/svg", "image");
-        entityElement.setAttribute('id', entity.id);
+        let entityElement = gameCanvas.querySelector(`#${entity.id}`);
+        if (!entityElement) { 
+            entityElement = document.createElementNS("http://www.w3.org/2000/svg", "image");
+            entityElement.setAttribute('id', entity.id);
+            entityElement.setAttribute('class', 'game-entity');
+            
+            const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            entityElement.appendChild(titleEl);
+            
+            entityElement.addEventListener('click', () => {
+                addLogMessage(entity.name, `Details: ${entity.userPrompt} (by ${entity.ownerUsername})`);
+            });
+            gameCanvas.appendChild(entityElement);
+            gsap.set(entityElement, { opacity: 0, scale: 0.5 }); 
+        }
+        
         entityElement.setAttributeNS('http://www.w3.org/1999/xlink', 'href', entity.imageUrl);
         entityElement.setAttribute('x', entity.x);
         entityElement.setAttribute('y', entity.y);
         entityElement.setAttribute('width', ENTITY_DISPLAY_SIZE);
         entityElement.setAttribute('height', ENTITY_DISPLAY_SIZE);
-        entityElement.setAttribute('class', 'game-entity');
-        entityElement.style.transformOrigin = `${entity.x + ENTITY_DISPLAY_SIZE/2}px ${entity.y + ENTITY_DISPLAY_SIZE/2}px`; // For scaling from center
-
-        // Add a title for hover info
-        const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
-        titleEl.textContent = `${entity.name} (created by ${entity.ownerUsername || 'Unknown'}). Prompt: "${entity.userPrompt}"`;
-        entityElement.appendChild(titleEl);
+        entityElement.style.transformOrigin = `${entity.x + ENTITY_DISPLAY_SIZE/2}px ${entity.y + ENTITY_DISPLAY_SIZE/2}px`;
         
-        entityElement.addEventListener('click', () => {
-            addLogMessage(entity.name, `Details: ${entity.userPrompt} (by ${entity.ownerUsername})`);
-        });
+        const titleEl = entityElement.querySelector('title');
+        titleEl.textContent = `${entity.name} (created by ${entity.ownerUsername || 'Unknown'}). Prompt: "${entity.userPrompt}"`;
 
-        gameCanvas.appendChild(entityElement);
-        gsap.fromTo(entityElement, { opacity: 0, scale: 0.5 }, { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(1.7)" });
+        gsap.to(entityElement, { opacity: 1, scale: 1, x: entity.x, y: entity.y, duration: 0.5, ease: "back.out(1.7)" });
     }
 }
 
 function renderPlayers(presence) {
-    playersListDiv.innerHTML = ''; // Clear old list
+    playersListDiv.innerHTML = '';
     for (const clientId in presence) {
         const player = presence[clientId];
-        if (player && player.username && room.peers[clientId]) { // Ensure player data and peer info exist
+        if (player && player.username && room.peers[clientId]) {
             const playerDiv = document.createElement('div');
             playerDiv.classList.add('player-item');
 
             const avatarImg = document.createElement('img');
-            avatarImg.src = room.peers[clientId].avatarUrl || 'https://images.websim.com/default-avatar.png'; // Use actual avatar or a default
+            avatarImg.src = room.peers[clientId].avatarUrl || `https://avatar.iran.liara.run/username?username=${player.username}`;
             avatarImg.alt = player.username;
             avatarImg.classList.add('player-avatar');
 
@@ -146,17 +155,96 @@ function renderPlayers(presence) {
     }
 }
 
-async function handleCommandSubmit() {
-    const commandText = commandInput.value.trim();
-    if (!commandText) return;
+function addSimulatedComment(promptText, username) {
+    commentIdCounter++;
+    const newComment = {
+        id: `comment-${commentIdCounter}-${Date.now()}`,
+        timestamp: Date.now(),
+        user: username || "Anonymous",
+        prompt: promptText,
+        status: 'pending', 
+        processed: false,
+        outputMessage: null,
+    };
+    metadataComments.unshift(newComment); 
+    renderMetadataComments();
+}
 
-    setLoading(true, "Thinking...");
-    addLogMessage(room.peers[room.clientId]?.username || "You", commandText);
-    commandInput.value = ''; // Clear input
+function renderMetadataComments() {
+    metadataCommentsListDiv.innerHTML = '';
+    if (metadataComments.length === 0) {
+        metadataCommentsListDiv.innerHTML = '<p>No comments yet. Simulate one!</p>';
+        return;
+    }
+
+    metadataComments.forEach(comment => {
+        const itemDiv = document.createElement('div');
+        itemDiv.classList.add('metadata-comment-item');
+        itemDiv.setAttribute('data-comment-id', comment.id);
+
+        const metaP = document.createElement('p');
+        metaP.classList.add('comment-meta');
+        metaP.textContent = `By: ${comment.user} - ${new Date(comment.timestamp).toLocaleTimeString()}`;
+
+        const promptP = document.createElement('p');
+        promptP.classList.add('comment-prompt');
+        promptP.textContent = `Prompt: "${comment.prompt}"`;
+        
+        const statusP = document.createElement('p');
+        statusP.classList.add('comment-status', `status-${comment.status}`);
+        statusP.textContent = `Status: ${comment.status.charAt(0).toUpperCase() + comment.status.slice(1)}`;
+
+        itemDiv.appendChild(metaP);
+        itemDiv.appendChild(promptP);
+        itemDiv.appendChild(statusP);
+
+        if (comment.outputMessage) {
+            const outputP = document.createElement('p');
+            outputP.classList.add('comment-output');
+            outputP.textContent = `Output: ${comment.outputMessage}`;
+            itemDiv.appendChild(outputP);
+        }
+
+        const processButton = document.createElement('button');
+        processButton.textContent = (comment.status === 'success' || comment.status === 'error') ? 'Re-process' : 'Process';
+        if (comment.status === 'processing') {
+            processButton.disabled = true;
+            processButton.textContent = 'Processing...';
+        }
+        processButton.addEventListener('click', () => handleCommentClick(comment.id));
+        
+        itemDiv.appendChild(processButton);
+        metadataCommentsListDiv.appendChild(itemDiv);
+    });
+}
+
+function handleCommentClick(commentId) {
+    const comment = metadataComments.find(c => c.id === commentId);
+    if (!comment) {
+        addLogMessage("Error", `Comment ${commentId} not found.`);
+        return;
+    }
+    processCommentPrompt(comment);
+}
+
+async function processCommentPrompt(comment) {
+    if (comment.status === 'processing') {
+        addLogMessage("System", `Comment "${comment.prompt}" by ${comment.user} is already being processed.`);
+        return;
+    }
+
+    comment.status = 'processing';
+    comment.processed = true; 
+    renderMetadataComments(); 
+
+    const commandText = comment.prompt;
+
+    setLoading(true, `Processing: "${commandText.substring(0, 30)}..."`);
+    addLogMessage(comment.user || "System", `Executing: "${commandText}"`);
 
     try {
         const currentEntitiesForLlm = Object.values(room.roomState.entities || {})
-            .filter(e => e && e.name && e.userPrompt) // Ensure entity is not null and has necessary fields
+            .filter(e => e && e.name && e.userPrompt)
             .map(e => ({ 
                 id: e.id, 
                 name: e.name, 
@@ -164,18 +252,18 @@ async function handleCommandSubmit() {
                 ownerUsername: e.ownerUsername 
             }));
 
-        const systemPrompt = `You are a creative game master for a collaborative, generative world displayed on a 2D canvas. Players interact by typing commands.
-Your primary goal is to interpret player commands and respond with JSON to manipulate the game world or provide information.
+        const systemPrompt = `You are a creative game master for a collaborative, generative world displayed on a 2D canvas. Players interact by submitting "comments" which are prompts/commands.
+Your primary goal is to interpret these prompts and respond with JSON to manipulate the game world or provide information.
 
-Available player commands you should try to interpret:
+Available actions:
 1.  **Create an entity**: (e.g., "add a happy sun", "draw a mysterious forest")
     *   Respond with: { "action": "create_entity", "name": "entity_name", "image_prompt": "detailed visual description for AI image generation (aim for transparent background)", "user_prompt": "${commandText}" }
     *   'entity_name' should be concise.
-    *   'image_prompt' should be rich and guide the image generator. Specify art styles if implied by the user (e.g., 'pixel art', 'vector illustration', 'realistic photo'). Example: "A whimsical, fluffy pink cloud with a smiling face, cartoon style, transparent background."
+    *   'image_prompt' should be rich. Specify art styles if implied. Example: "A whimsical, fluffy pink cloud with a smiling face, cartoon style, transparent background."
 
 2.  **Describe the world or an entity**: (e.g., "what do I see?", "tell me about the dragon")
     *   If general: { "action": "describe_world", "description": "an evocative summary of the scene" }
-    *   If specific to an entity: { "action": "describe_entity", "entity_name": "target_entity_name", "description": "details about this entity" } (You'll need to find target_entity_name from current_entities)
+    *   If specific to an entity (find by name): { "action": "describe_entity", "entity_name": "target_entity_name", "description": "details about this entity" }
 
 3.  **General Chat / Unrecognized commands**:
     *   Respond with: { "action": "chat_message", "message": "your conversational response or clarification request" }
@@ -185,75 +273,78 @@ ${JSON.stringify(currentEntitiesForLlm)}
 
 Respond ONLY with a valid JSON object.`;
 
-        conversationHistory.push({ role: "user", content: commandText });
-        conversationHistory = conversationHistory.slice(-6); // Keep history short
+        let currentConversation = [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: commandText }
+        ];
 
         const completion = await websim.chat.completions.create({
-            messages: [
-                { role: "system", content: systemPrompt },
-                ...conversationHistory
-            ],
+            messages: currentConversation, 
             json: true,
         });
         
-        conversationHistory.push(completion); // Add AI response to history
-
         const responseData = JSON.parse(completion.content);
-        await processLlmResponse(responseData, commandText);
+        await processLlmResponse(responseData, commandText, comment.user);
+
+        comment.status = 'success';
+        comment.outputMessage = responseData.description || responseData.message || `Action '${responseData.action}' completed.`;
+        if (responseData.action === 'create_entity' && responseData.name) {
+            comment.outputMessage = `${responseData.name} created.`;
+        }
 
     } catch (error) {
-        console.error("LLM or command processing error:", error);
-        addLogMessage("Error", `Failed to process command: ${error.message}`);
-        conversationHistory.pop(); // Remove failed user message if LLM call errored
+        console.error(`LLM or command processing error for comment by ${comment.user}:`, error);
+        addLogMessage("Error", `Failed to process comment "${comment.prompt}" by ${comment.user}: ${error.message}`);
+        comment.status = 'error';
+        comment.outputMessage = `Error: ${error.message}`;
     } finally {
         setLoading(false);
+        renderMetadataComments(); 
     }
 }
 
-async function processLlmResponse(responseData, originalUserPrompt) {
-    addLogMessage("Game Master (AI)", `Action: ${responseData.action}` + (responseData.name ? ` - ${responseData.name}` : ''));
+async function processLlmResponse(responseData, originalUserPrompt, commentAuthorUsername) {
+    addLogMessage("Game Master (AI)", `Action: ${responseData.action}` + (responseData.name ? ` - ${responseData.name}` : '') + (responseData.message ? ` - ${responseData.message}`: '') + (responseData.description ? ` - Preview: ${responseData.description.substring(0,50)}...`: ''));
 
     switch (responseData.action) {
         case 'create_entity':
-            setLoading(true, `Generating image for ${responseData.name}...`);
+            setLoading(true, `Generating image for ${responseData.name}...`); 
             try {
                 const imageResult = await websim.imageGen({
                     prompt: responseData.image_prompt,
-                    transparent: true, // Important for parsing out white backgrounds
-                    aspect_ratio: "1:1" // Keep it square for consistency
+                    transparent: true,
+                    aspect_ratio: "1:1"
                 });
 
                 if (!imageResult || !imageResult.url) {
                     throw new Error("Image generation failed to return a URL.");
                 }
 
-                const entityId = `entity-${room.clientId}-${Date.now()}`;
+                const entityId = `entity-${room.clientId}-${Date.now()}`; 
                 const newEntity = {
                     id: entityId,
                     name: responseData.name,
                     imageUrl: imageResult.url,
                     x: Math.random() * (WORLD_WIDTH - ENTITY_DISPLAY_SIZE),
                     y: Math.random() * (WORLD_HEIGHT - ENTITY_DISPLAY_SIZE),
-                    ownerClientId: room.clientId,
-                    ownerUsername: room.peers[room.clientId]?.username || "Unknown",
-                    userPrompt: originalUserPrompt,
+                    ownerClientId: room.clientId, 
+                    ownerUsername: commentAuthorUsername || "Unknown", 
+                    userPrompt: originalUserPrompt, 
                     createdAt: Date.now()
                 };
                 
-                // Use an object for entities to allow easy addition/deletion by ID
                 const updatedEntities = { ... (room.roomState.entities || {}) };
                 updatedEntities[entityId] = newEntity;
 
                 await room.updateRoomState({ entities: updatedEntities });
-                addLogMessage("System", `${responseData.name} has been created!`);
+                addLogMessage("System", `${responseData.name} has been created by ${commentAuthorUsername}!`);
 
             } catch (error) {
                 console.error("Image generation or entity creation error:", error);
                 addLogMessage("Error", `Could not create ${responseData.name}: ${error.message}`);
-            } finally {
-                setLoading(false);
-            }
-            break;
+                throw error; 
+            } 
+        break;
 
         case 'describe_world':
             addLogMessage("Game Master (AI)", responseData.description);
@@ -270,6 +361,7 @@ async function processLlmResponse(responseData, originalUserPrompt) {
         default:
             addLogMessage("Error", `Unknown action from AI: ${responseData.action}`);
             console.warn("Unknown AI action:", responseData);
+            throw new Error(`Unknown AI action: ${responseData.action}`);
     }
 }
 
@@ -281,11 +373,7 @@ function addLogMessage(sender, message) {
     messageElement.appendChild(document.createTextNode(message));
     
     messageLog.appendChild(messageElement);
-    messageLog.scrollTop = messageLog.scrollHeight; // Auto-scroll to bottom
+    messageLog.scrollTop = messageLog.scrollHeight;
 }
 
-
-// Start the application
 init();
-
-
